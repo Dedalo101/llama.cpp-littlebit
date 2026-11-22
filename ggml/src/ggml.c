@@ -3440,10 +3440,17 @@ struct ggml_tensor * ggml_mul_mat_lb1(
     struct ggml_tensor * mf  = ggml_cast(ctx, m,  GGML_TYPE_F32);
     struct ggml_tensor * u1f = ggml_cast(ctx, u1, GGML_TYPE_F32);
 
-    struct ggml_tensor * x1 = ggml_mul(ctx, x, v2f);
-    struct ggml_tensor * h1 = ggml_mul_mat(ctx, Vq, x1);
-    struct ggml_tensor * h2 = ggml_mul(ctx, h1, mf);
-    struct ggml_tensor * h3 = ggml_mul_mat(ctx, Uq, h2);
+    // Keep activations out of Q8_0. Repeating Q8_0 quantization at every
+    // factor matmul compounds across 36 layers and destroys the model.
+    struct ggml_tensor * Vqf = ggml_cast(ctx, Vq, GGML_TYPE_F16);
+    struct ggml_tensor * Uqf = ggml_cast(ctx, Uq, GGML_TYPE_F16);
+
+    struct ggml_tensor * x1  = ggml_mul(ctx, x, v2f);
+    struct ggml_tensor * x1f = ggml_cast(ctx, x1, GGML_TYPE_F16);
+    struct ggml_tensor * h1  = ggml_mul_mat(ctx, Vqf, x1f);
+    struct ggml_tensor * h2  = ggml_mul(ctx, h1, mf);
+    struct ggml_tensor * h2f = ggml_cast(ctx, h2, GGML_TYPE_F16);
+    struct ggml_tensor * h3  = ggml_mul_mat(ctx, Uqf, h2f);
     return ggml_mul(ctx, h3, u1f);
 }
 

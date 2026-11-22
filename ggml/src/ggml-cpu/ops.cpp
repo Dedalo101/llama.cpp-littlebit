@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <vector>
 
 // ggml_compute_forward_dup
 
@@ -472,9 +473,10 @@ static void ggml_compute_forward_dup_bytes(
     }
 }
 
-static void ggml_compute_forward_dup_from_q(
+static void ggml_compute_forward_dup_from_q_impl(
         const ggml_compute_params * params,
-              ggml_tensor * dst) {
+              ggml_tensor * dst,
+              bool to_f16) {
 
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -501,6 +503,8 @@ static void ggml_compute_forward_dup_from_q(
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
 
+    std::vector<float> tmp(to_f16 ? qk : 0);
+
     for (int64_t ir = ir0; ir < ir1; ++ir) {
 
         uint32_t i = ir * qk;
@@ -517,9 +521,14 @@ static void ggml_compute_forward_dup_from_q(
         const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
         const int64_t dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
 
+        float * out = to_f16 ? tmp.data() : (float *) ((char *) dst->data + dst_offset);
+
         dequantize_row_q(
-                (const void *) ((char *) src0->data + x_offset),
-                     (float *) ((char *)  dst->data + dst_offset), qk);
+                (const void *) ((char *) src0->data + x_offset), out, qk);
+
+        if (to_f16) {
+            ggml_fp32_to_fp16_row(tmp.data(), (ggml_fp16_t *) ((char *) dst->data + dst_offset), qk);
+        }
     }
 }
 
@@ -575,7 +584,11 @@ void ggml_compute_forward_dup(
         default:
             {
                 if (ggml_is_quantized(src0->type) && dst->type == GGML_TYPE_F32) {
-                    ggml_compute_forward_dup_from_q(params, dst);
+                    ggml_compute_forward_dup_from_q_impl(params, dst, false);
+                    break;
+                }
+                if (ggml_is_quantized(src0->type) && dst->type == GGML_TYPE_F16) {
+                    ggml_compute_forward_dup_from_q_impl(params, dst, true);
                     break;
                 }
                 GGML_ABORT("fatal error");

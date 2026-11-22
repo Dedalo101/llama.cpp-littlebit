@@ -4,8 +4,8 @@
 Export scope:
   * packed LittleBit factors -> GGML_TYPE_LB1 tensors (byte-for-byte copy)
   * u1, v1*u2, v2 scales -> F16 tensors
-  * embed_tokens -> one Q8_0 token_embd.weight; output.weight is omitted so
-    llama.cpp's Qwen3 model ties the head to the embedding
+  * embed_tokens -> Q8_0 token_embd.weight
+  * lm_head -> Q8_0 output.weight when the checkpoint stores an untied head
   * layer norms / q_norm / k_norm / final norm -> F16 passthrough
   * Qwen3 hparams and tokenizer metadata, copied from --tokenizer-gguf
 
@@ -232,8 +232,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("src", help="HF repo id or local .safetensors file")
     ap.add_argument("out", nargs="?", help="output .gguf path")
-    ap.add_argument("--max-layers", type=int, default=1,
-                    help="only export layers 0..N-1 (default 1; 0 = all)")
+    ap.add_argument("--max-layers", type=int, default=0,
+                    help="only export layers 0..N-1 (default 0 = all; use 1 for a smoke test)")
     ap.add_argument("--dry-run", action="store_true", help="header only, no download")
     ap.add_argument("--skip-embeddings", action="store_true",
                     help="skip the large embedding download (format tests only)")
@@ -276,7 +276,7 @@ def main() -> None:
     writer.add_file_type(0)
     writer.add_uint32("littlebit.version", 1)
     writer.add_uint32("littlebit.block_bits", 32)
-    writer.add_bool("littlebit.tied_embeddings", True)
+    writer.add_bool("littlebit.tied_embeddings", "lm_head.weight" not in st.header)
     writer.add_string("littlebit.source", args.src)
 
     writer.add_uint32("qwen3.block_count", args.block_count or n_layer)
@@ -352,6 +352,18 @@ def main() -> None:
                           raw_shape=(emb.shape[0], byte_row), raw_dtype=GQT.Q8_0)
         exported += 1
         print(f"  exported token_embd.weight Q8_0: {q.nbytes/1e6:.1f} MB")
+
+    if "lm_head.weight" in st.header and not args.skip_embeddings:
+        head = st.read("lm_head.weight")
+        if n_tokens is not None and head.shape[0] != n_tokens:
+            raise SystemExit(f"tokenizer has {n_tokens} tokens but lm_head has {head.shape[0]} rows")
+        qh = quantize_q8_0(head)
+        block, bsize = GGML_QUANT_SIZES[GQT.Q8_0]
+        byte_row = head.shape[1] // block * bsize
+        writer.add_tensor("output.weight", qh,
+                          raw_shape=(head.shape[0], byte_row), raw_dtype=GQT.Q8_0)
+        exported += 1
+        print(f"  exported output.weight Q8_0: {qh.nbytes/1e6:.1f} MB")
 
     for hf, gg in (
         ("model.norm.weight", "output_norm.weight"),

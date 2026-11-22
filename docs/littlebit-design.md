@@ -199,15 +199,56 @@ Done locally on `littlebit-tensor`:
   `.weight` optional, `build_lora_mm` override runs the factor chain and
   adds the residual branch. `libllama`, `llama-completion` and
   `llama-perplexity` build clean.
-- One-layer GGUF (650 MB, 76 tensors) loads and runs a deterministic
-  raw-mode completion in `llama-completion` (`-no-cnv`, `-ngl 0`, temp 0):
-  `The capital of France is is is is is is is is is`. The repetition is the
-  expected result of truncating an 8B model to one layer. `llama-perplexity`
-  also completes over a small token file; its astronomical PPL is a graph
-  sanity result, not a quality measurement.
+- One-layer GGUF loads and runs a deterministic raw-mode completion in
+  `llama-completion` (`-no-cnv`, `-ngl 0`, temp 0). Repetition is the
+  expected result of truncating an 8B model to one layer.
+- Full 36-layer export completed with `--max-layers 0 --block-count 36`.
+  Two full-model bugs were found only by testing all layers:
+  * each LB1 factor matmul originally quantized activations to Q8_0; error
+    compounded across 36 layers. The factor chain now dequantizes `Uq`/`Vq`
+    to F16 and keeps intermediates in F16/F32. Graph max abs error dropped
+    from 0.2206 to 0.0135 against the F32 oracle reference.
+  * `config.json` has `tie_word_embeddings: false`, and the safetensors file
+    contains a separate `lm_head.weight`. Tying the output to the embedding
+    produced gibberish. The exporter now writes `output.weight` as Q8_0;
+    the corrected full GGUF is 1.7 GB with 2667 tensors.
+- Full-model sanity check now works:
+  `The capital of France is Paris, and the city is known for its vibrant culture,`
+- `tools/littlebit_cpu.py`: single-file, CPU-only GGUF runner needing only
+  Python 3.10+ and numpy. It memory-maps GGUF, dequantizes Q8_0 embeddings
+  and LB1 factors on demand, uses `output.weight` when present, and
+  implements Qwen3 RMSNorm, NEOX RoPE, GQA attention, the LB1 factor chain,
+  `_R` residual branch, and greedy decode. It reproduces the compiled fork
+  on the corrected full model: prompt `The capital of France is` ->
+  ` Paris, and the`. This is the portable correctness artifact for old
+  laptops; the compiled fork is the fast CPU path.
 
-Remaining: full 36-layer export, full-model PPL versus the published
-checkpoint numbers, NEON kernel (stage 4), Ollama payload build (stage 5).
+Full-model PPL is validated: **21.2364 +/- 0.59424** on 12 windows with
+`-c 2048 -b 2048 --chunks 12`, 299,078 tokens, Q8_0 embeddings and Q8_0
+output head. This is within the 20.88 +/- 0.5 target and below the 23 gate.
+This `llama-perplexity` build did not print `n_tokens`; the token count comes
+from the separate tokenizer run.
+
+Remaining: NEON kernel (stage 4), Ollama payload build (stage 5).
+
+## PPL validation target
+
+The relevant baseline is the published checkpoint, not the uncompressed
+model. luben93's upstream discussion
+(`ggml-org/llama.cpp#32671`) reports, on WikiText-2 with 2048-token windows:
+
+- Standard Qwen3-8B Q4_K_M: **8.78 ± 0.07**
+- LittleBit 0.55 bpw, Q4_K_M embeddings: **22.31 ± 0.18** full test set
+- LittleBit 0.55 bpw, Q8_0 embeddings: **20.88** on 12 windows
+- Converted GGUF vs independent float32 PyTorch reference: within ~0.007
+  PPL per window
+
+A ~5.5-6.5 baseline is not in that discussion. This published checkpoint is
+a format demonstration, not a quality-preserving compression of Qwen3-8B.
+Our Q8_0 embedding/head export was scored with the same 2048-token,
+12-window protocol and landed at 21.2364, within the scale-validation
+target. The PPL log did not print `n_tokens`; the exact 299,078 token count
+comes from the separate tokenizer run and is recorded above.
 
 ## Staged plan
 
@@ -222,10 +263,10 @@ checkpoint numbers, NEON kernel (stage 4), Ollama payload build (stage 5).
 
 ## Decisions made 2026-11-22
 
-- **Stage 1 includes embedding tying + quantisation.** Untied FP16
-  `embed_tokens` + `lm_head` = 2,489 MB of 2,968 MB. Tying halves that to
-  ~1.24 GB; Q8_0 on top brings it to ~0.65 GB and total file to ~0.75 GB.
-  Q4_K (~0.33 GB, total ~0.4 GB) is a follow-up once the pipeline is proven.
+- **Embedding handling was revised after full-model testing.** The published
+  checkpoint has `tie_word_embeddings: false`, so the earlier tying plan was
+  wrong. Both `embed_tokens` and `lm_head` are exported as Q8_0, giving a
+  1.7 GB full GGUF. Q4_K for these two tensors is a follow-up.
 - Fork is public under `Dedalo101`, with `LITTLEBIT_NOTICE.md` documenting
   the clean-room position and the CC BY-NC 4.0 restriction.
 
@@ -251,4 +292,12 @@ cd ~/Work/llama.cpp-littlebit
 git remote add origin https://github.com/ggml-org/llama.cpp.git
 git fetch --depth=1 origin b12257
 git checkout -b littlebit-tensor FETCH_HEAD
+```
+
+Portable CPU-only check (no build, no Ollama, no GPU):
+
+```
+python3 tools/littlebit_cpu.py \
+  ~/.cache/littlebit/littlebit-qwen3-8b-lb1-v3.gguf \
+  -p 'The capital of France is' -n 4 -c 64 --temp 0
 ```
