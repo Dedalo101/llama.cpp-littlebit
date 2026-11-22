@@ -1,8 +1,7 @@
 # LittleBit Qwen3-8B LB1 v3 (draft model card)
 
-> Draft for the public model upload. Fill in the final PPL/timing line once the
-> 12-window run with the final F32 kernel completes, and replace the placeholder
-> repository name at upload time. Do not publish before the license review in
+> Draft for the public model upload. Replace the placeholder repository name at
+> upload time. Do not publish before the license review in
 > `LITTLEBIT_NOTICE.md` is acknowledged.
 
 ## Summary
@@ -34,10 +33,10 @@ and is not affiliated with SamsungLabs or the llama.cpp project.
 
 | Gate | Result |
 |---|---|
-| WikiText-2 raw test, 12 windows, c=2048 | 21.2364 ± 0.5942 (P32-equivalent kernel) |
+| WikiText-2 raw test, 12 windows, c=2048 | 21.2364 ± 0.59425 (final F32 kernel, full rerun) |
 | Target | 20.88 ± 0.5 |
 | Acceptance ceiling | <= 23 |
-| Final F32 kernel | chunk-1 and chunk-2 deltas <= 0.0016 vs P32; full rerun pending |
+| Earlier P32-equivalent kernel | 21.2364 ± 0.59424; chunk deltas <= 0.0016 |
 
 Rejected variants, kept as negative evidence:
 

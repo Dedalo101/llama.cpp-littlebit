@@ -224,17 +224,17 @@ Done locally on `littlebit-tensor`:
   ` Paris, and the`. This is the portable correctness artifact for old
   laptops; the compiled fork is the fast CPU path.
 
-Full-model PPL is validated: **21.2364 +/- 0.59424** on 12 windows with
+Full-model PPL is validated: **21.2364 +/- 0.59425** on 12 windows with
 `-c 2048 -b 2048 --chunks 12`, 299,078 tokens, Q8_0 embeddings and Q8_0
 output head. This is within the 20.88 +/- 0.5 target and below the 23 gate.
 This `llama-perplexity` build did not print `n_tokens`; the token count comes
-from the separate tokenizer run. The F32 vec-dot kernel was checked against
-the full F16-cast baseline: chunk 1 is 24.5867 versus 24.5851 in the full v3
-run, and chunk 2 is 26.7478 versus 26.7467. The difference is 0.0016 PPL, so
-the kernel change is numerically equivalent and the 21.2364 full-run gate
-still applies.
+from the separate tokenizer run. The final packed F32 vec-dot kernel was
+checked against the full F16-cast baseline on chunks 1 and 2 (deltas <= 0.0016
+PPL), and the complete 12-window run was then repeated with the final kernel:
+it reproduced 21.2364 +/- 0.59425 exactly. No equivalence assumption remains.
 
-Remaining: NEON kernel (stage 4), Ollama payload build (stage 5).
+Remaining: Ollama payload build (stage 5). The NEON LB1 dot for stage 4 is
+implemented; hardware throughput still needs to be collected on ARM.
 
 ## Stage 1 CPU kernel
 
