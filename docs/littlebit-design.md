@@ -1,8 +1,10 @@
 # LittleBit tensor type for llama.cpp / Ollama — design preview
 
-Status: **design only, no code changed.** Branch `littlebit-tensor` in
+Status: **design plus local implementation.** Branch `littlebit-tensor` in
 `~/Work/llama.cpp-littlebit`, forked from Ollama's pinned llama.cpp tag
-`b12257` (commit `17701e4`). Nothing pushed.
+`b12257` (commit `17701e4`). The public branch currently holds only the clean
+import commit `17c90265f`; the code described below is local and unpushed
+pending review and explicit approval.
 
 ## Why this pin matters
 
@@ -20,6 +22,44 @@ Baselining on `main` would break the build. Pin: `b12257`.
 Ollama builds with `GGML_CPU_ALL_VARIANTS=ON` and `GGML_BACKEND_DL=ON`, so
 any new type/op must be registered in **every CPU variant** built from
 `ggml/src/ggml-cpu/CMakeLists.txt`, not just the generic build.
+
+## Why a new type instead of Q1_0 reuse
+
+Three public forks shipped Q1_0-based loaders in November 2026:
+`luben93/littlebit-llamacpp`, `Cybertiron/llama.cpp-littlebit`, and
+`ScarionWorkspace/littlebit-gguf`. That approach is valid: it reuses stock
+kernels, needs a small patch, and has published end-to-end GPU results.
+
+Their own format docs quantify the cost of the reuse:
+
+- Q1_0 stores one F16 block scale per 128 bits. Packing the per-row scale
+  vectors into those block scales costs **+12.5% bytes** on the sign matrices.
+- Q1_0 needs `ne[0]` divisible by 128. Checkpoint ranks 544 / 208 / 824 are
+  padded to 640 / 256 / 896. ScarionWorkspace measures **0.648 bpw** on the
+  linears instead of LittleBit's published **0.548 bpw** target.
+- The converter must invert the bit convention (LittleBit bit 1 = -1,
+  Q1_0 bit 1 = +d) and write an F16 scale before every block. It cannot copy
+  the checkpoint's int32 words straight through.
+
+What `GGML_TYPE_LB1` buys for the CPU-only, 4 GB phone target:
+
+- 32-bit blocks, no per-block scale. `u1`, `v1*u2` and `v2` stay as three
+  plain F16 vectors, so the scale bytes are exactly the checkpoint's.
+- Padding is only to a 32-bit word: 544 stays 544, 208 -> 224, 824 -> 832.
+  The linear bit rate stays near the published 0.55 bpw.
+- The exporter copies `U_packed` / `V_packed` int32 words byte for byte.
+- Q1_0 semantics are not overloaded, so LittleBit-2 / ITQ scale layouts can
+  be added later without reworking the format.
+
+Tradeoff stated plainly: Q1_0 is the faster route to a working GPU runtime,
+and its momentum is real. A new type means new dequant kernels on every
+backend that wants it. For this project's first milestone there is no GPU
+target, so only the scalar and NEON paths matter; the GPU cost is deferred,
+not paid now. If the goal changes to "run on a laptop GPU this month", use
+the Q1_0 approach instead of this branch.
+
+The clean-room position is unchanged: this design comes from the published
+format and the independent numpy spike, not from Samsung's source.
 
 ## The math (confirming the requested op sequence)
 
@@ -118,6 +158,56 @@ littlebit.source_checkpoint str
 10. New `tools/littlebit-export.py` — reads a safetensors checkpoint via
     HTTP range reads (reuse `runtime/inspect_checkpoint.py` from the spike),
     writes GGUF. No torch needed.
+
+## Format discoveries during stage 1
+
+- **Effective split != padded split.** In the published checkpoint,
+  `mlp.down_proj` has `V_packed.shape[0] = 824` but `U_packed` has 26 words
+  = 832 bits. The trailing 8 bits are `+1` padding. The exporter keeps the
+  original int32 words, gives `Uq` a logical `ne[0] = 832`, and zero-pads
+  the middle scale `m` from 824 to 832 so the extra latents add zero.
+  Never derive split from `U_packed` word count alone.
+- **Residual branches are separate groups.** `_R` suffixes must be kept in
+  the group prefix; otherwise `_R` scales silently overwrite the main ones.
+- **gguf-py `raw_shape` is numpy-style**: ggml `ne[0]` is the last element.
+- Qwen3 in this llama.cpp already falls back to `token_embd.weight` when
+  `output.weight` is absent, so tying needs no C change.
+
+## Stage 1 and 2 status (2026-11-22)
+
+Done locally on `littlebit-tensor`:
+
+- `GGML_TYPE_LB1 = 44`: traits, 32-bit block, exact bit packing, dequant,
+  quantize-ref, GGUF validation, quantize-chunk support.
+- `tests/test-littlebit.cpp`: traits, bit layout, GGUF roundtrip, and graph
+  math. Uses hard `CHECK` macros because Release builds define NDEBUG.
+  With the same F32 input and factors rebuilt as a dense Q8_0 weight:
+  LB1 max abs err 0.2206 (1.18% of ref scale 18.6750), dense Q8_0 err
+  0.2844 (1.52%), LB1 vs dense Q8_0 err 0.2810 (1.50%). The LB1 chain is
+  closer to the F32 reference than the dense Q8_0 path.
+- `tools/littlebit-export.py`: real checkpoint dry-run (504 packed groups,
+  252 linears x 2 branches), byte-identical packed tensors, residual
+  branches, full Qwen3 hparams, tokenizer copy, and Q8_0 embeddings.
+  Three exporter bugs were found and fixed only by writing and loading a
+  real GGUF: gguf-py Q8_0 `raw_shape` must be byte-shaped (`hidden/32*34`);
+  `Vq` rows must be padded to the same 32-bit split width as `m` and `Uq`
+  (208 -> 224, 824 -> 832) or `ggml_mul` cannot broadcast; RMS norm weights
+  must be F32, not F16, because `build_norm` multiplies them directly.
+- Full `model.safetensors` downloaded locally (2,968,804,064 bytes) and
+  SHA-256 verified against the HF LFS OID.
+- Qwen3 loader/graph wiring: `.lb.*` and `.lb_R.*` factors loaded, dense
+  `.weight` optional, `build_lora_mm` override runs the factor chain and
+  adds the residual branch. `libllama`, `llama-completion` and
+  `llama-perplexity` build clean.
+- One-layer GGUF (650 MB, 76 tensors) loads and runs a deterministic
+  raw-mode completion in `llama-completion` (`-no-cnv`, `-ngl 0`, temp 0):
+  `The capital of France is is is is is is is is is`. The repetition is the
+  expected result of truncating an 8B model to one layer. `llama-perplexity`
+  also completes over a small token file; its astronomical PPL is a graph
+  sanity result, not a quality measurement.
+
+Remaining: full 36-layer export, full-model PPL versus the published
+checkpoint numbers, NEON kernel (stage 4), Ollama payload build (stage 5).
 
 ## Staged plan
 

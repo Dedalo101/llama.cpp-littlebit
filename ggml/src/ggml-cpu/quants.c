@@ -23,6 +23,39 @@
 
 #define UNUSED GGML_UNUSED
 
+void quantize_row_lb1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_lb1_ref(x, (int32_t *) y, k);
+}
+
+// LittleBit packed signs vs Q8_0 activations.
+// x is an array of int32 words, 32 signs per word: bit 0 -> +1, bit 1 -> -1.
+// y is a sequence of Q8_0 blocks. The scale of each 32-value group comes from y.
+void ggml_vec_dot_lb1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx,
+                           const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_ASSERT(n % 32 == 0);
+    GGML_ASSERT(nrc == 1);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const int32_t  * x = (const int32_t  *) vx;
+    const block_q8_0 * y = (const block_q8_0 *) vy;
+
+    const int nb = n/32;
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; i++) {
+        const uint32_t word = (uint32_t) x[i];
+        const int8_t * q = y[i].qs;
+        int sum_b = 0;
+        for (int j = 0; j < 32; j++) {
+            sum_b += ((word >> j) & 1) ? -q[j] : q[j];
+        }
+        sumf += GGML_CPU_FP16_TO_FP32(y[i].d) * sum_b;
+    }
+
+    *s = sumf;
+}
+
 void quantize_row_q1_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q1_0_ref(x, y, k);
 }

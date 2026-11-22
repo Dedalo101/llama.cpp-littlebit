@@ -681,6 +681,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) ggml_fp16_to_fp32_row,
         .from_float_ref           = (ggml_from_float_t) ggml_fp32_to_fp16_row,
     },
+    [GGML_TYPE_LB1] = {
+        .type_name                = "lb1",
+        .blck_size                = 32,
+        .type_size                = sizeof(int32_t),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_lb1,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_lb1_ref,
+    },
     [GGML_TYPE_Q1_0] = {
         .type_name                = "q1_0",
         .blck_size                = QK1_0,
@@ -3417,6 +3425,26 @@ struct ggml_tensor * ggml_mul_mat(
     result->src[1] = b;
 
     return result;
+}
+
+struct ggml_tensor * ggml_mul_mat_lb1(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * v2,
+        struct ggml_tensor  * Vq,
+        struct ggml_tensor  * m,
+        struct ggml_tensor  * Uq,
+        struct ggml_tensor  * u1) {
+    // scales are stored as F16 in GGUF; ggml elementwise ops need matching types
+    struct ggml_tensor * v2f = ggml_cast(ctx, v2, GGML_TYPE_F32);
+    struct ggml_tensor * mf  = ggml_cast(ctx, m,  GGML_TYPE_F32);
+    struct ggml_tensor * u1f = ggml_cast(ctx, u1, GGML_TYPE_F32);
+
+    struct ggml_tensor * x1 = ggml_mul(ctx, x, v2f);
+    struct ggml_tensor * h1 = ggml_mul_mat(ctx, Vq, x1);
+    struct ggml_tensor * h2 = ggml_mul(ctx, h1, mf);
+    struct ggml_tensor * h3 = ggml_mul_mat(ctx, Uq, h2);
+    return ggml_mul(ctx, h3, u1f);
 }
 
 void ggml_mul_mat_set_prec(
@@ -8242,6 +8270,16 @@ size_t ggml_quantize_chunk(
     size_t result = 0;
 
     switch (type) {
+        case GGML_TYPE_LB1:
+            {
+                GGML_ASSERT(n_per_row % 32 == 0);
+                for (int64_t r = 0; r < nrows; r++) {
+                    quantize_row_lb1_ref(src + start + r*n_per_row,
+                                         (int32_t *) ((char *) dst + (start_row + r)*row_size),
+                                         n_per_row);
+                }
+                result = nrows*row_size;
+            } break;
         case GGML_TYPE_Q1_0:    result = quantize_q1_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q2_0:    result = quantize_q2_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_0:    result = quantize_q4_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

@@ -603,6 +603,11 @@ struct llama_model_qwen3 : public llama_model_base {
 
     struct graph : public llm_graph_context {
         graph(const llm_graph_params & params);
+
+        ggml_tensor * build_lora_mm(
+                  ggml_tensor * w,
+                  ggml_tensor * cur,
+                  ggml_tensor * w_s = nullptr) const override;
     protected:
         // the helpers alone, a derived graph builds its own body
         struct no_build {};

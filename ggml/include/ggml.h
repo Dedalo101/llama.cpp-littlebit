@@ -433,7 +433,8 @@ extern "C" {
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
         GGML_TYPE_F8_E4M3 = 43,
-        GGML_TYPE_COUNT   = 44,
+        GGML_TYPE_LB1     = 44, // LittleBit packed +1/-1 bits, 32 bits per int32 word
+        GGML_TYPE_COUNT   = 45,
     };
 
     // [TAG_GGML_PREC]
@@ -1499,6 +1500,19 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    // LittleBit factorised linear: y = (x * v2) @ Vq^T * m @ Uq^T * u1
+    // x is [k, n_tokens] F32, Vq is [k, split] LB1, Uq is [split, out] LB1,
+    // v2/m/u1 are F16 scale vectors. The helper casts scales to F32 and uses
+    // ordinary ggml_mul_mat calls, so every backend with LB1 dot support works.
+    GGML_API struct ggml_tensor * ggml_mul_mat_lb1(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * v2,
+            struct ggml_tensor  * Vq,
+            struct ggml_tensor  * m,
+            struct ggml_tensor  * Uq,
+            struct ggml_tensor  * u1);
 
     // change the precision of a matrix multiplication
     // set to GGML_PREC_F32 for higher precision (useful for phi-2)

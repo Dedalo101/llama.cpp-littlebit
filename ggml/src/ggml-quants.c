@@ -569,6 +569,36 @@ void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRI
     }
 }
 
+void quantize_row_lb1_ref(const float * GGML_RESTRICT x, int32_t * GGML_RESTRICT y, int64_t k) {
+    assert(k % 32 == 0);
+
+    const int64_t nb = k/32;
+
+    for (int64_t i = 0; i < nb; i++) {
+        uint32_t word = 0;
+        for (int j = 0; j < 32; j++) {
+            // LittleBit convention: +1 -> 0, -1 -> 1. Zeros map to +1.
+            if (x[i*32 + j] < 0.0f) {
+                word |= (uint32_t) 1 << j;
+            }
+        }
+        y[i] = (int32_t) word;
+    }
+}
+
+void dequantize_row_lb1(const int32_t * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k % 32 == 0);
+
+    const int64_t nb = k/32;
+
+    for (int64_t i = 0; i < nb; i++) {
+        const uint32_t word = (uint32_t) x[i];
+        for (int j = 0; j < 32; j++) {
+            y[i*32 + j] = ((word >> j) & 1) ? -1.0f : 1.0f;
+        }
+    }
+}
+
 void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK_MXFP4;
 
@@ -5408,6 +5438,9 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
     const size_t nb = nbytes/ggml_type_size(type);
 
     switch (type) {
+        case GGML_TYPE_LB1:
+            // every 32-bit pattern is a valid packed LittleBit word
+            break;
         case GGML_TYPE_BF16:
             {
                 int nans = 0;

@@ -262,6 +262,20 @@ struct llama_layer_switch_lora {
     struct ggml_tensor * b_down = nullptr;
 };
 
+struct llama_layer_lb {
+    struct ggml_tensor * Vq   = nullptr;
+    struct ggml_tensor * m    = nullptr;
+    struct ggml_tensor * Uq   = nullptr;
+    struct ggml_tensor * v2   = nullptr;
+    struct ggml_tensor * u1   = nullptr;
+
+    struct ggml_tensor * Vq_R = nullptr;
+    struct ggml_tensor * m_R  = nullptr;
+    struct ggml_tensor * Uq_R = nullptr;
+    struct ggml_tensor * v2_R = nullptr;
+    struct ggml_tensor * u1_R = nullptr;
+};
+
 struct llama_layer {
     // normalization
     struct ggml_tensor * attn_norm       = nullptr;
@@ -313,6 +327,10 @@ struct llama_layer {
     struct ggml_tensor * wo_enc    = nullptr;
     struct ggml_tensor * wqkv_gate = nullptr;
     struct ggml_tensor * wqkv_gate_b = nullptr;
+
+    // LittleBit factorised projections
+    struct llama_layer_lb lb_q, lb_k, lb_v, lb_o;
+
     // K2 Horizon MoVA
     struct ggml_tensor * attn_v_gate   = nullptr;
     struct ggml_tensor * attn_v_gate_b = nullptr;
@@ -341,6 +359,9 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate     = nullptr; // w1
     struct ggml_tensor * ffn_down     = nullptr; // w2
     struct ggml_tensor * ffn_up       = nullptr; // w3
+
+    struct llama_layer_lb lb_gate, lb_up, lb_down;
+
     struct ggml_tensor * ffn_gate_enc = nullptr;
     struct ggml_tensor * ffn_down_enc = nullptr;
     struct ggml_tensor * ffn_up_enc   = nullptr;
