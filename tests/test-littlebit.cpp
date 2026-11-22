@@ -14,6 +14,9 @@
 #include <vector>
 
 extern "C" void quantize_row_q8_0_ref(const float * x, void * y, int64_t k);
+extern "C" void ggml_vec_dot_lb1_f32(int n, float * s, size_t bs, const void * vx, size_t bx,
+                                     const void * vy, size_t by, int nrc);
+extern "C" void dequantize_row_lb1(const int32_t * x, float * y, int64_t k);
 
 // Release builds define NDEBUG, so assert() is a no-op. Use a hard check.
 #define CHECK(cond) do { \
@@ -119,6 +122,33 @@ static float lcg(void) {
     static uint32_t state = 1234567;
     state = state * 1103515245u + 12345u;
     return ((float) (state >> 8) / (float) (1u << 23)) - 1.0f;
+}
+
+static void test_vec_dot_lb1_f32(void) {
+    const int n = 256;
+    const int nb = n/32;
+    std::vector<int32_t> packed(nb);
+    std::vector<float> x(n), deq(n);
+    uint32_t state = 987654321u;
+    for (int i = 0; i < n; i++) {
+        state = state*1103515245u + 12345u;
+        x[i] = ((float) (state >> 8) / (float) (1u << 23)) - 1.0f;
+    }
+    for (int i = 0; i < nb; i++) {
+        state = state*1103515245u + 12345u;
+        packed[i] = (int32_t) state;
+    }
+    dequantize_row_lb1(packed.data(), deq.data(), n);
+
+    float got = 0.0f;
+    ggml_vec_dot_lb1_f32(n, &got, 0, packed.data(), 0, x.data(), 0, 1);
+
+    float want = 0.0f;
+    for (int i = 0; i < n; i++) {
+        want += deq[i]*x[i];
+    }
+    CHECK(std::fabs(got - want) < 1e-4f);
+    std::printf("vec_dot_lb1_f32: %.6f vs %.6f\n", got, want);
 }
 
 static void test_mul_mat_lb1(void) {
@@ -232,6 +262,7 @@ static void test_mul_mat_lb1(void) {
 int main(void) {
     test_traits();
     test_bit_layout();
+    test_vec_dot_lb1_f32();
     test_gguf_roundtrip();
     test_mul_mat_lb1();
     std::printf("LittleBit LB1 tests passed\n");

@@ -56,6 +56,55 @@ void ggml_vec_dot_lb1_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void
     *s = sumf;
 }
 
+// LittleBit packed signs vs F32 activations.
+// Sign reconstruction avoids Q8_0 activation quantization, which compounds
+// across 36 layers. Factors are binary, so the dot product is sign flip + sum.
+void ggml_vec_dot_lb1_f32(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx,
+                          const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_ASSERT(n % 32 == 0);
+    GGML_ASSERT(nrc == 1);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const int32_t * x = (const int32_t *) vx;
+    const float  * y = (const float  *) vy;
+
+    const int nb = n/32;
+    float sumf = 0.0f;
+
+#if defined(__AVX2__)
+    const __m256i lane = _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7);
+    const __m256i one  = _mm256_set1_epi32(1);
+    __m256 acc = _mm256_setzero_ps();
+
+    for (int i = 0; i < nb; i++) {
+        const __m256i w = _mm256_set1_epi32((int) x[i]);
+        for (int j = 0; j < 32; j += 8) {
+            const __m256i shift = _mm256_add_epi32(lane, _mm256_set1_epi32(j));
+            const __m256i sel  = _mm256_and_si256(_mm256_srlv_epi32(w, shift), one);
+            const __m256i mask = _mm256_slli_epi32(sel, 31);
+            const __m256  v    = _mm256_loadu_ps(y + i*32 + j);
+            acc = _mm256_add_ps(acc, _mm256_xor_ps(v, _mm256_castsi256_ps(mask)));
+        }
+    }
+
+    __m128 sum = _mm_add_ps(_mm256_castps256_ps128(acc), _mm256_extractf128_ps(acc, 1));
+    sum = _mm_hadd_ps(sum, sum);
+    sum = _mm_hadd_ps(sum, sum);
+    sumf = _mm_cvtss_f32(sum);
+#else
+    for (int i = 0; i < nb; i++) {
+        const uint32_t word = (uint32_t) x[i];
+        for (int j = 0; j < 32; j++) {
+            sumf += ((word >> j) & 1) ? -y[i*32 + j] : y[i*32 + j];
+        }
+    }
+#endif
+
+    *s = sumf;
+}
+
 void quantize_row_q1_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q1_0_ref(x, y, k);
 }

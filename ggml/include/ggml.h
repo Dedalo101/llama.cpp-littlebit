@@ -1504,7 +1504,8 @@ extern "C" {
     // LittleBit factorised linear: y = (x * v2) @ Vq^T * m @ Uq^T * u1
     // x is [k, n_tokens] F32, Vq is [k, split] LB1, Uq is [split, out] LB1,
     // v2/m/u1 are F16 scale vectors. The helper casts scales to F32 and uses
-    // ordinary ggml_mul_mat calls, so every backend with LB1 dot support works.
+    // ordinary ggml_mul_mat calls with F32 activations, so every backend with
+    // LB1 dot support works without quantizing activations.
     GGML_API struct ggml_tensor * ggml_mul_mat_lb1(
             struct ggml_context * ctx,
             struct ggml_tensor  * x,

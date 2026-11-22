@@ -174,6 +174,17 @@ def hf_config(src: str) -> dict:
         return json.loads(r.read())
 
 
+def validate_tie_config(cfg: dict, header: dict) -> None:
+    if "tie_word_embeddings" not in cfg:
+        return
+    tied = bool(cfg["tie_word_embeddings"])
+    has_head = "lm_head.weight" in header
+    if tied == has_head:
+        raise SystemExit(
+            f"tie_word_embeddings={tied} conflicts with lm_head.weight present={has_head}"
+        )
+
+
 SUFFIXES = {
     "U_packed": ("U_packed", False),
     "V_packed": ("V_packed", False),
@@ -245,6 +256,7 @@ def main() -> None:
 
     st = SafeTensors(args.src)
     cfg = hf_config(args.src)
+    validate_tie_config(cfg, st.header)
     groups = parse_packed_groups(st.header)
 
     print(f"source tensors : {len(st.header)}")

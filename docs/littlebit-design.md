@@ -205,9 +205,10 @@ Done locally on `littlebit-tensor`:
 - Full 36-layer export completed with `--max-layers 0 --block-count 36`.
   Two full-model bugs were found only by testing all layers:
   * each LB1 factor matmul originally quantized activations to Q8_0; error
-    compounded across 36 layers. The factor chain now dequantizes `Uq`/`Vq`
-    to F16 and keeps intermediates in F16/F32. Graph max abs error dropped
-    from 0.2206 to 0.0135 against the F32 oracle reference.
+    compounded across 36 layers. An interim fix cast `Uq`/`Vq` to F16 and
+    kept intermediates in F16/F32, dropping graph max abs error from 0.2206
+    to 0.0135. The final fix keeps factors packed and uses the AVX2
+    XOR/F32 dot kernel described below, improving it further to 0.0070.
   * `config.json` has `tie_word_embeddings: false`, and the safetensors file
     contains a separate `lm_head.weight`. Tying the output to the embedding
     produced gibberish. The exporter now writes `output.weight` as Q8_0;
@@ -227,9 +228,63 @@ Full-model PPL is validated: **21.2364 +/- 0.59424** on 12 windows with
 `-c 2048 -b 2048 --chunks 12`, 299,078 tokens, Q8_0 embeddings and Q8_0
 output head. This is within the 20.88 +/- 0.5 target and below the 23 gate.
 This `llama-perplexity` build did not print `n_tokens`; the token count comes
-from the separate tokenizer run.
+from the separate tokenizer run. The F32 vec-dot kernel was checked against
+the full F16-cast baseline: chunk 1 is 24.5867 versus 24.5851 in the full v3
+run, and chunk 2 is 26.7478 versus 26.7467. The difference is 0.0016 PPL, so
+the kernel change is numerically equivalent and the 21.2364 full-run gate
+still applies.
 
 Remaining: NEON kernel (stage 4), Ollama payload build (stage 5).
+
+## Stage 1 CPU kernel
+
+The factor chain keeps LB1 factors packed and uses F32 activations. The CPU
+type traits for `GGML_TYPE_LB1` now point to `ggml_vec_dot_lb1_f32`, so the
+generic `ggml_mul_mat` path calls a kernel that reconstructs each `-1` sign
+with an XOR of the activation sign bit and accumulates in F32. No dequantized
+weight tensor is materialized, and activations are never quantized to Q8_0.
+The AVX2 path handles 8 activations per vector; a scalar fallback covers CPUs
+without AVX2. This replaced the earlier F16-cast factor path. Graph max abs
+error improved from 0.0135 to 0.0070 against the F32 oracle reference.
+
+`tools/littlebit-stats.py` reports the weight bytes read per forward and the
+derived bytes per token for a chosen batch size. For the full GGUF:
+
+```text
+LB1 factor bytes: 468910080
+output head     : 661225472
+bytes / forward : 1130135552
+bytes / token @1    : 1,130,135,552
+bytes / token @2048 : 551,824
+```
+
+The output head dominates single-token decode bandwidth. A Q4_K head is a
+possible stage 1.5 change, gated on PPL staying below 23.
+
+Benchmark command, with peak RSS from `/usr/bin/time`:
+
+```sh
+/usr/bin/time -v env LD_LIBRARY_PATH=build/bin ./build/bin/llama-completion \
+  -m littlebit-qwen3-8b-lb1-v3.gguf -no-cnv -ngl 0 --temp 0 \
+  -c 128 -p "The capital of France is" -n 32
+```
+
+`llama-completion` reports prompt and decode tokens per second separately.
+Measured peak RSS on this host was 1864.4 MB for `-c 128 -n 32` with `-t 8`,
+below the 3.2 GB gate.
+
+A fused 2-row x 4-token LB1 matmul was prototyped and A/B tested against the
+type-traits path. It produced identical output but was neutral-to-slower
+(prompt 2.80 -> 1.75 t/s at `-t 1`, 5.52 -> 5.42 t/s at `-t 4` on a loaded
+host), so it was dropped. The generic `mul_mat` + `vec_dot` path is kept as
+the single integration point, matching how other quantized types work. Large
+batch prefill remains bandwidth/compute bound by the 468.9 MB factor chain;
+a proper repacked tiled GEMM is a separate future optimization.
+
+Thread count matters: on this 8-core host, `-t 4` was roughly twice as fast
+as `-t 1` for both prompt and decode. `-t 8` regressed badly because an
+Ollama `llama-server` was concurrently using two cores; decode numbers need
+a quiet host for a final model-card figure.
 
 ## PPL validation target
 
