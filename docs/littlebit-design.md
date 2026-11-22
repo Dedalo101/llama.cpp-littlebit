@@ -411,3 +411,13 @@ python3 tools/littlebit_cpu.py \
   ~/.cache/littlebit/littlebit-qwen3-8b-lb1-v3.gguf \
   -p 'The capital of France is' -n 4 -c 64 --temp 0
 ```
+
+Factual regression check against the compiled fork (averaged PPL is not enough —
+the Q4_K/Q6_K head experiments flipped individual answers while staying near
+the PPL gate):
+
+```
+python3 tools/littlebit-factual-smoke.py \
+  --model ~/.cache/littlebit/littlebit-qwen3-8b-lb1-v3.gguf \
+  --binary build/bin/llama-completion
+```
