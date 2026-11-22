@@ -1614,7 +1614,8 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
         cb_func(ubatch, cur, name, il);
     }
 
-    if (getenv("LLAMA_LB1_PROFILE") != nullptr && cur != nullptr && name != nullptr) {
+    static const bool profile_enabled = getenv("LLAMA_LB1_PROFILE") != nullptr;
+    if (profile_enabled && cur != nullptr && name != nullptr) {
         // Stable marker used by the LLAMA_LB1_PROFILE section profiler.
         // Set after cb_func, which formats its own debug names on the same tensor.
         static thread_local std::string prof_marker;

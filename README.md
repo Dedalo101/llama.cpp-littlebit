@@ -17,6 +17,27 @@
 
 </div>
 
+## LittleBit fork (experimental)
+
+This branch adds a CPU/ARM runtime for **LittleBit LB1** packed ±1 factor
+models (sub-1-bit Qwen3), pinned to Ollama's llama.cpp `b12257` (`17701e4`).
+It is a personal fork on `littlebit-tensor`, not an upstream proposal.
+
+- Clean-room implementation from the published format and an independent numpy
+  oracle; see [LITTLEBIT_NOTICE.md](LITTLEBIT_NOTICE.md) for the licensing
+  position (upstream LittleBit is CC BY-NC 4.0 — review before commercial use).
+- Design, kernel notes, quality gates and benchmarks:
+  [docs/littlebit-design.md](docs/littlebit-design.md).
+- Portable correctness artifact (Python 3 + numpy, no build/GPU/Ollama):
+  `tools/littlebit_cpu.py`.
+- Export a LittleBit checkpoint to the validated GGUF layout with
+  `tools/littlebit-export.py`; the output head stays Q8_0 (untied from the
+  embedding). Q4_K/Q6_K heads were tested and rejected on quality.
+- Profile decode sections with `LLAMA_LB1_PROFILE=1`. ARM targets use the NEON
+  LB1 dot; x86 uses AVX2. No GPU is required.
+
+Model weights are not included in this repository.
+
 ## Quick start
 
 A few options to get `llama.cpp` installed on your machine:
