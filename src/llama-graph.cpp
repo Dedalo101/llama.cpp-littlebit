@@ -18,6 +18,7 @@
 #include "llama-memory-recurrent.h"
 
 #include <cassert>
+#include <cstdlib>
 #include <cmath>
 #include <algorithm>
 #include <array>
@@ -1611,6 +1612,17 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {
         cb_func(ubatch, cur, name, il);
+    }
+
+    if (getenv("LLAMA_LB1_PROFILE") != nullptr && cur != nullptr && name != nullptr) {
+        // Stable marker used by the LLAMA_LB1_PROFILE section profiler.
+        // Set after cb_func, which formats its own debug names on the same tensor.
+        static thread_local std::string prof_marker;
+        prof_marker = "prof:";
+        prof_marker += name;
+        prof_marker += ":";
+        prof_marker += std::to_string(il);
+        ggml_set_name(cur, prof_marker.c_str());
     }
 }
 

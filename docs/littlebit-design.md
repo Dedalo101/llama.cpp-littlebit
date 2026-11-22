@@ -258,8 +258,38 @@ bytes / token @1    : 1,130,135,552
 bytes / token @2048 : 551,824
 ```
 
-The output head dominates single-token decode bandwidth. A Q4_K head is a
-possible stage 1.5 change, gated on PPL staying below 23.
+The output head dominates single-token decode bandwidth. Quantized heads were
+evaluated and rejected on quality, so the 661225472-byte Q8_0 head stays the
+default. On the first WikiText-2 window, Q4_K scored PPL 25.3521 and Q6_K
+24.7543, versus 24.5867 for Q8_0 (gate: within +0.1). Q4_K also changed
+"The capital of France is Paris, and the city is known for its vibrant
+culture" to "...located in the French Riviera", a factual hallucination that
+the averaged PPL does not reveal. Neither compact head is shipped.
+
+## Decode profile
+
+`LLAMA_LB1_PROFILE=1` enables a per-section timer in the CPU graph executor.
+It attributes complete graph nodes (measured up to the node barrier, so
+multi-thread work is included) to `embed`, `norm`, `attn`, `ffn`, the two LB1
+matvec buckets, `head`, and `other`. The Qwen3 graph attaches stable `prof:`
+markers at section boundaries for this purpose.
+
+Measured on the x86 i7-1185G7 host, 8-token decode, Q8_0 head, -c 64:
+
+| threads | LB1 ffn | LB1 attn | head | norm | other |
+|---|---|---|---|---|---|
+| 1 | 73.0% | 19.6% | 6.1% | 0.3% | 0.9% |
+| 2 | 72.4% | 19.4% | 6.0% | 0.6% | 1.5% |
+| 4 | 70.1% | 19.4% | 7.0% | 1.1% | 2.5% |
+| 8 | 61.2% | 18.2% | 7.4% | 4.1% | 8.9% |
+
+The head is only ~6-7% of decode here, and llama.cpp already quantizes F32
+activations to Q8_0 and runs an int8 x int8 vec_dot for Q8_0 weights
+(`type_traits_cpu[GGML_TYPE_Q8_0]`). A separate "int8 head dot" prototype
+would duplicate what is already in the tree: `tools/littlebit-head-bench.cpp`
+measures the existing path at ~39 ms for a full 151936 x 4096 head matvec on
+this host, ~16 GiB/s single-threaded. The bottleneck is the LB1 factor path,
+not the head. ARM numbers still need to be collected on a Pi 5.
 
 Benchmark command, with peak RSS from `/usr/bin/time`:
 

@@ -192,6 +192,7 @@ ggml_tensor * llama_model_qwen3::graph::build_backbone() {
     ggml_tensor * inpL;
 
     inpL = build_inp_embd(model.tok_embd);
+    ggml_set_name(inpL, "prof:embed:-1");
 
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
@@ -234,6 +235,7 @@ ggml_tensor * llama_model_qwen3::graph::build_backbone() {
             cur = build_attn(inp_attn,
                     model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+            cb(cur, "attn_out", il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);

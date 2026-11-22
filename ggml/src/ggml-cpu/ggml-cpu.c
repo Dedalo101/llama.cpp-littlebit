@@ -55,6 +55,108 @@
 #    include "spacemit/ime.h"
 #endif
 
+// ---------------------------------------------------------------------------
+// Lightweight per-section decode profiler. Set LLAMA_LB1_PROFILE=1 to enable.
+// Sections come from "prof:" names attached to Qwen3 graph markers; this runs
+// only on thread 0 and measures the full node (i.e. up to the node barrier).
+// ---------------------------------------------------------------------------
+enum lb1_prof_section {
+    LB1_PROF_EMBED = 0,
+    LB1_PROF_NORM,
+    LB1_PROF_ATTN,
+    LB1_PROF_FFN,
+    LB1_PROF_LB1_ATTN,
+    LB1_PROF_LB1_FFN,
+    LB1_PROF_HEAD,
+    LB1_PROF_OTHER,
+    LB1_PROF_COUNT
+};
+
+static const char * g_lb1_prof_names[LB1_PROF_COUNT] = {
+    "embed", "norm", "attn", "ffn", "lb1_attn", "lb1_ffn", "head", "other",
+};
+
+static int   g_lb1_prof_enabled   = -1;
+static enum lb1_prof_section g_lb1_prof_cur = LB1_PROF_OTHER;
+static int64_t  g_lb1_prof_us[LB1_PROF_COUNT];
+static uint64_t g_lb1_prof_nodes[LB1_PROF_COUNT];
+static uint64_t g_lb1_prof_graphs;
+
+static void lb1_prof_dump(void) {
+    int64_t total = 0;
+    for (int i = 0; i < LB1_PROF_COUNT; ++i) {
+        total += g_lb1_prof_us[i];
+    }
+    fprintf(stderr, "\nLLAMA_LB1_PROFILE: %llu graph(s), %.3f ms total\n",
+            (unsigned long long) g_lb1_prof_graphs, total / 1000.0);
+    for (int i = 0; i < LB1_PROF_COUNT; ++i) {
+        if (g_lb1_prof_nodes[i] == 0) {
+            continue;
+        }
+        double pct = total > 0 ? 100.0 * (double) g_lb1_prof_us[i] / (double) total : 0.0;
+        fprintf(stderr, "  %-10s %9.3f ms  %6.2f%%  %8.3f ms/graph  %llu nodes\n",
+                g_lb1_prof_names[i], g_lb1_prof_us[i] / 1000.0, pct,
+                g_lb1_prof_graphs ? (double) g_lb1_prof_us[i] / 1000.0 / (double) g_lb1_prof_graphs : 0.0,
+                (unsigned long long) g_lb1_prof_nodes[i]);
+    }
+}
+
+static void lb1_prof_init(void) {
+    if (g_lb1_prof_enabled < 0) {
+        g_lb1_prof_enabled = getenv("LLAMA_LB1_PROFILE") != NULL;
+        if (g_lb1_prof_enabled) {
+            atexit(lb1_prof_dump);
+        }
+    }
+}
+
+static int lb1_prof_on(void) {
+    return g_lb1_prof_enabled > 0;
+}
+
+static enum lb1_prof_section lb1_prof_classify(const struct ggml_tensor * node) {
+    if (node->name != NULL && strncmp(node->name, "prof:", 5) == 0) {
+        const char * name = node->name + 5;
+        const char * sep = strchr(name, ':');
+        const size_t len = sep != NULL ? (size_t) (sep - name) : strlen(name);
+#define LB1_PROF_MARKER(s) (len == strlen(s) && strncmp(name, s, len) == 0)
+        if (LB1_PROF_MARKER("embed")) {
+            g_lb1_prof_cur = LB1_PROF_EMBED;
+        } else if (LB1_PROF_MARKER("attn_out")) {
+            g_lb1_prof_cur = LB1_PROF_ATTN;
+        } else if (LB1_PROF_MARKER("ffn_out") || LB1_PROF_MARKER("l_out")) {
+            g_lb1_prof_cur = LB1_PROF_FFN;
+        } else if (LB1_PROF_MARKER("result_output")) {
+            g_lb1_prof_cur = LB1_PROF_HEAD;
+        } else if (strstr(name, "norm") != NULL) {
+            g_lb1_prof_cur = LB1_PROF_NORM;
+        } else {
+            g_lb1_prof_cur = LB1_PROF_OTHER;
+        }
+#undef LB1_PROF_MARKER
+        return g_lb1_prof_cur;
+    }
+
+    if (node->op == GGML_OP_MUL_MAT && node->src[0] != NULL &&
+            node->src[0]->type == GGML_TYPE_LB1) {
+        const char * w = node->src[0]->name != NULL ? node->src[0]->name : "";
+        if (strstr(w, "attn") != NULL) {
+            return LB1_PROF_LB1_ATTN;
+        }
+        if (strstr(w, "ffn") != NULL) {
+            return LB1_PROF_LB1_FFN;
+        }
+    }
+
+    return g_lb1_prof_cur;
+}
+
+static void lb1_prof_record(const struct ggml_tensor * node, int64_t us) {
+    enum lb1_prof_section s = lb1_prof_classify(node);
+    g_lb1_prof_us[s] += us;
+    g_lb1_prof_nodes[s]++;
+}
+
 // Note: once we move threading into a separate C++ file
 // will use std::hardware_destructive_interference_size instead of hardcoding it here
 // and we'll use C++ attribute syntax.
@@ -3157,6 +3259,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     GGML_PRINT_DEBUG("thread #%d compute-start cplan %p last-graph %d\n", state->ith, (const void *)cplan, state->last_graph);
 #endif
 
+    const bool prof_this_thread = lb1_prof_on() && state->ith == 0;
+    struct ggml_tensor * prof_last_node = NULL;
+    int64_t prof_last_t0 = 0;
+
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
@@ -3167,6 +3273,12 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             continue;
+        }
+
+        const int64_t t_node = prof_this_thread ? ggml_time_us() : 0;
+        if (prof_this_thread) {
+            prof_last_node = node;
+            prof_last_t0   = t_node;
         }
 
         // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
@@ -3186,6 +3298,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         if (node_n + 1 < cgraph->n_nodes) {
             ggml_barrier(state->threadpool);
+            if (prof_this_thread) {
+                lb1_prof_record(node, ggml_time_us() - t_node);
+                prof_last_node = NULL;
+            }
         }
     }
 
@@ -3196,6 +3312,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #endif
 
     ggml_barrier(state->threadpool);
+
+    if (prof_this_thread && prof_last_node != NULL) {
+        lb1_prof_record(prof_last_node, ggml_time_us() - prof_last_t0);
+    }
 
 #ifdef GGML_USE_CPU_RISCV64_SPACEMIT
     ggml_backend_cpu_riscv64_spacemit_clear_numa_thread_affinity_threaded(state->ith);
@@ -3486,6 +3606,10 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 
     // don't leave affinity set on the main thread
     clear_numa_thread_affinity();
+
+    if (lb1_prof_on()) {
+        g_lb1_prof_graphs++;
+    }
 
     enum ggml_status ret = threadpool->ec;
 
@@ -3894,6 +4018,8 @@ int ggml_cpu_has_sme2(void) {
 }
 
 void ggml_cpu_init(void) {
+    lb1_prof_init();
+
     // needed to initialize ggml_time
     {
         struct ggml_init_params params = { 0, NULL, false };
