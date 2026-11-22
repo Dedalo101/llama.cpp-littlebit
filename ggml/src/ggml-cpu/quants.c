@@ -93,6 +93,26 @@ void ggml_vec_dot_lb1_f32(int n, float * GGML_RESTRICT s, size_t bs, const void 
     sum = _mm_hadd_ps(sum, sum);
     sum = _mm_hadd_ps(sum, sum);
     sumf = _mm_cvtss_f32(sum);
+#elif defined(__ARM_NEON)
+    // Extract each sign bit and XOR it into the F32 sign bit, as in the AVX2 path.
+    // NEON variable shifts use signed amounts; negative means shift right.
+    const int32x4_t   lane_neg = { 0, -1, -2, -3 };
+    const uint32x4_t  one      = vdupq_n_u32(1);
+    float32x4_t acc = vdupq_n_f32(0.0f);
+
+    for (int i = 0; i < nb; i++) {
+        const uint32x4_t w = vdupq_n_u32((uint32_t) x[i]);
+        for (int j = 0; j < 32; j += 4) {
+            const int32x4_t  shift = vaddq_s32(lane_neg, vdupq_n_s32(-j));
+            const uint32x4_t sel   = vandq_u32(vshlq_u32(w, shift), one);
+            const uint32x4_t sgn   = vshlq_n_u32(sel, 31); // 0x80000000 for a negative sign
+            const float32x4_t v    = vld1q_f32(y + i*32 + j);
+            acc = vaddq_f32(acc, vreinterpretq_f32_u32(veorq_u32(vreinterpretq_u32_f32(v), sgn)));
+        }
+    }
+
+    const float32x2_t sum2 = vpadd_f32(vget_low_f32(acc), vget_high_f32(acc));
+    sumf = vget_lane_f32(vpadd_f32(sum2, sum2), 0);
 #else
     for (int i = 0; i < nb; i++) {
         const uint32_t word = (uint32_t) x[i];

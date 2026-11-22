@@ -289,7 +289,32 @@ activations to Q8_0 and runs an int8 x int8 vec_dot for Q8_0 weights
 would duplicate what is already in the tree: `tools/littlebit-head-bench.cpp`
 measures the existing path at ~39 ms for a full 151936 x 4096 head matvec on
 this host, ~16 GiB/s single-threaded. The bottleneck is the LB1 factor path,
-not the head. ARM numbers still need to be collected on a Pi 5.
+not the head.
+
+On ARM the LB1 dot used to fall through to the scalar loop in `quants.c`,
+which is many times slower than the x86 AVX2 path. A NEON implementation was
+added under `#elif defined(__ARM_NEON)`: it extracts each packed sign with
+variable shifts, XORs it into the F32 sign bit and accumulates four lanes.
+It uses only baseline NEON (no SDOT/SVE), so it targets both Pi 5 (Cortex-A76)
+and Ampere Altra. Verified by clang cross-compile for `armv8.2-a` and by
+running the loop under `qemu-aarch64-static` against the scalar reference
+(n = 32..1024, error within float rounding). Real ARM throughput still needs
+to be collected on hardware.
+
+`tools/littlebit-lut-bench.cpp` evaluates the subset-sum LUT idea from first
+principles. Results on the x86 host:
+
+- 8-bit groups (256-entry tables): the dot is ~3.2x faster, but rebuilding the
+  per-token tables for all 36 layers costs ~39 ms and 359 MiB of writes. An
+  integrated opt-in prototype produced correct tokens but was *slower*
+  end-to-end, even when restricted to wide matrices: dependent table loads
+  cost more than the AVX2 instructions they replace. Not shipped.
+- 4-bit groups (16-entry tables): table rebuild drops to well under 1 ms, but
+  the dot is only 1.0-1.3x faster on AVX2. Also not shipped.
+
+The LUT idea remains plausible for ARM, where the baseline is scalar rather
+than AVX2, but it needs real hardware measurements before any integration.
+The current ARM lever is the NEON kernel above.
 
 Benchmark command, with peak RSS from `/usr/bin/time`:
 
