@@ -371,6 +371,32 @@ comes from the separate tokenizer run and is recorded above.
 | 4 | NEON kernel on ARM | tokens/s + MB/s on Pi / Oracle ARM |
 | 5 | Ollama local build with source override | `ollama run littlebit-qwen3` through the custom payload |
 
+### Ollama payload (stage 5)
+
+Ollama `v0.40.17` is the release that pins llama.cpp `b12257`, matching this
+fork. Build with the source override:
+
+```sh
+git clone --depth 1 --branch v0.40.17 https://github.com/ollama/ollama.git
+cd ollama
+OLLAMA_LLAMA_CPP_SOURCE=~/Work/llama.cpp-littlebit cmake -B build .
+OLLAMA_LLAMA_CPP_SOURCE=~/Work/llama.cpp-littlebit cmake --build build --parallel 8
+```
+
+Two small Go-side changes are needed; see `docs/littlebit-ollama.patch`:
+`fs/gguf/tensor.go` must know `GGML_TYPE_LB1 = 44` (four bytes per 32 signs),
+and `fs/gguf/metadata.go` must ignore the exported Qwen3 Jinja chat template
+for `littlebit.version` models so a simple Modelfile `TEMPLATE` wins. The
+patch is local only — do not push it to Ollama.
+
+Verified with an isolated store and server (`OLLAMA_MODELS=...`,
+`OLLAMA_HOST=127.0.0.1:11435`): `ollama create` accepts the 1.7 GB GGUF and
+`POST /api/generate` with `"raw": true` reproduces
+`The capital of France is Paris, and the city is known for its vibrant culture`.
+The published checkpoint is a format demo, not a chat model: prompts wrapped
+in ChatML produce weak/degenerate answers, so raw completion mode is the
+supported Ollama path.
+
 ## Decisions made 2026-11-22
 
 - **Embedding handling was revised after full-model testing.** The published

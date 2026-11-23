@@ -1,0 +1,59 @@
+diff --git i/fs/gguf/metadata.go w/fs/gguf/metadata.go
+index 78d8369..a332470 100644
+--- i/fs/gguf/metadata.go
++++ w/fs/gguf/metadata.go
+@@ -168,6 +168,12 @@ func (m *Metadata) ContextLength() uint64 {
+ }
+ 
+ func (m *Metadata) ChatTemplate() string {
++	// LittleBit fork: the exported Qwen3 GGUF carries the full upstream Jinja
++	// template, which this Ollama build detects and prefers over the Modelfile
++	// TEMPLATE. Ignore it so the simple ChatML template in the Modelfile wins.
++	if m.ExactKeyValue("littlebit.version").Uint() != 0 {
++		return ""
++	}
+ 	return m.String("tokenizer.chat_template")
+ }
+ 
+diff --git i/fs/gguf/tensor.go w/fs/gguf/tensor.go
+index 51fae46..43cd5dd 100644
+--- i/fs/gguf/tensor.go
++++ w/fs/gguf/tensor.go
+@@ -152,6 +152,10 @@ const (
+ 	TensorTypeNVFP4
+ 	TensorTypeQ1_0
+ 	TensorTypeQ2_0
++
++	// LittleBit fork: GGML_TYPE_LB1 = 44, packed +/-1 signs (four bytes per
++	// 32 values, no scale). 43 is unused.
++	TensorTypeLB1 TensorType = 44
+ )
+ 
+ func (tt TensorType) NumBytes() float64 {
+@@ -226,6 +230,8 @@ func (tt TensorType) typeSize() int64 {
+ 		return 2 + tt.blockSize()/8
+ 	case TensorTypeQ2_0:
+ 		return 2 + tt.blockSize()/4
++	case TensorTypeLB1:
++		return 4 // one int32 word = 32 packed signs, no scale
+ 	default:
+ 		return 0
+ 	}
+@@ -244,6 +250,8 @@ func (tt TensorType) blockSize() int64 {
+ 		return 1
+ 	case TensorTypeNVFP4, TensorTypeQ2_0:
+ 		return 64
++	case TensorTypeLB1:
++		return 32
+ 	case TensorTypeQ1_0:
+ 		return 128
+ 	case TensorTypeQ4_0,
+@@ -348,6 +356,8 @@ func (tt TensorType) String() string {
+ 		return "q1_0"
+ 	case TensorTypeQ2_0:
+ 		return "q2_0"
++	case TensorTypeLB1:
++		return "lb1"
+ 	default:
+ 		return "unknown"
+ 	}
