@@ -1,8 +1,7 @@
-# LittleBit Qwen3-8B LB1 v3 (draft model card)
+# LittleBit Qwen3-8B LB1 v3
 
-> Draft for the public model upload. Replace the placeholder repository name at
-> upload time. Do not publish before the license review in
-> `LITTLEBIT_NOTICE.md` is acknowledged.
+> Public repo: `Dedalo101/littlebit-qwen3-8b-lb1-v3`. Do not use commercially
+> before the license review in `LITTLEBIT_NOTICE.md` is acknowledged.
 
 ## Summary
 
@@ -11,8 +10,10 @@ A 1.0 bpw-class LittleBit LB1 export of Qwen3-8B for CPU-only inference. The
 44`); the token embedding and the untied output head stay Q8_0 because compact
 heads measurably damaged factual answers.
 
-The model is experimental. It is not a general-purpose replacement for Qwen3
-and is not affiliated with SamsungLabs or the llama.cpp project.
+The model is experimental. It is a format demonstration, not a
+quality-preserving compression of Qwen3-8B and not a chat assistant: greedy
+short-completion prompts behave, while ChatML-wrapped prompts degrade. It is
+not affiliated with SamsungLabs or the llama.cpp project.
 
 ## Files and layout
 
@@ -37,6 +38,7 @@ and is not affiliated with SamsungLabs or the llama.cpp project.
 | Target | 20.88 ± 0.5 |
 | Acceptance ceiling | <= 23 |
 | Earlier P32-equivalent kernel | 21.2364 ± 0.59424; chunk deltas <= 0.0016 |
+| Greedy-output regression | 6/6 prompts reproduce the recorded v3 completions |
 
 Rejected variants, kept as negative evidence:
 
@@ -62,7 +64,16 @@ python3 tools/littlebit_cpu.py littlebit-qwen3-8b-lb1-v3.gguf \
 LD_LIBRARY_PATH=build/bin ./build/bin/llama-completion \
   -m littlebit-qwen3-8b-lb1-v3.gguf -no-cnv -ngl 0 --temp 0 \
   -c 128 -p 'The capital of France is' -n 32
+
+# Catch argmax drift from a kernel/head change
+python3 tools/littlebit-output-regression.py \
+  --model littlebit-qwen3-8b-lb1-v3.gguf --binary build/bin/llama-completion
 ```
+
+Ollama `v0.40.17` can load this GGUF after applying
+`docs/littlebit-ollama.patch` locally and building with
+`OLLAMA_LLAMA_CPP_SOURCE` pointing at the fork. Use raw completion mode
+(`"raw": true` in `/api/generate`); the checkpoint is not chat-tuned.
 
 Decode profiling: `LLAMA_LB1_PROFILE=1`. On the x86 test host ~90% of decode is
 the LB1 factor path and ~6-7% is the Q8_0 head. The head already uses int8
