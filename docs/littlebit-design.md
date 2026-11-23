@@ -412,12 +412,14 @@ python3 tools/littlebit_cpu.py \
   -p 'The capital of France is' -n 4 -c 64 --temp 0
 ```
 
-Factual regression check against the compiled fork (averaged PPL is not enough —
-the Q4_K/Q6_K head experiments flipped individual answers while staying near
-the PPL gate):
+Greedy-output regression check against the compiled fork (averaged PPL is not
+enough — the Q4_K/Q6_K head experiments flipped individual answers while
+staying near the PPL gate). The published checkpoint is a format demonstration,
+not a chat model, so the gate is exact reproduction of the recorded v3 outputs,
+not world-fact correctness:
 
 ```
-python3 tools/littlebit-factual-smoke.py \
+python3 tools/littlebit-output-regression.py \
   --model ~/.cache/littlebit/littlebit-qwen3-8b-lb1-v3.gguf \
   --binary build/bin/llama-completion
 ```
