@@ -1,3 +1,13 @@
+---
+license: other
+tags:
+- littlebit
+- lb1
+- qwen3
+- gguf
+- cpu
+---
+
 # LittleBit Qwen3-8B LB1 v3
 
 > Public repo: `Dedalo101/littlebit-qwen3-8b-lb1-v3`. Do not use commercially
